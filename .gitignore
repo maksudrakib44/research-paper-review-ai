@@ -1,0 +1,37 @@
+# Virtual Environment (NEVER commit this)
+venv/
+.venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Project data
+data/chroma_db/
+data/chroma_db/*
+!data/chroma_db/.gitkeep
+data/papers/*.pdf
+!data/papers/.gitkeep
+logs/
+*.log
+
+# Environment secrets
+.env
+.streamlit/
+
+# Large files
+*.dll
+*.exe
+*.bin
+*.tmp
+*.cache
