@@ -1,6 +1,5 @@
 
-```markdown
-# 📚 Research Paper RAG System
+### 📚 Research Paper RAG System
 
 A production-ready **Retrieval-Augmented Generation (RAG)** system for academic research papers. Upload PDF/TXT papers, ask questions, and get accurate answers with citations.
 
