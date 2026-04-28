@@ -98,6 +98,11 @@ def init_pipeline():
         from config.settings import settings
         from src.pipeline import ResearchPipeline
         
+        # Check if API key is available
+        if not settings.groq_api_key:
+            st.error("❌ Groq API key not found. Please add it to .env file or Streamlit Secrets.")
+            st.stop()
+        
         with st.spinner("🚀 Loading AI Assistant..."):
             try:
                 st.session_state.pipeline = ResearchPipeline(settings)
@@ -140,7 +145,7 @@ with st.sidebar:
         with col2:
             st.metric("🎯 GT Pairs", pipeline.gt_count)
     else:
-        st.error("❌ System unavailable")
+        st.error("❌ System unavailable - Check API key")
         st.stop()
     
     st.divider()
