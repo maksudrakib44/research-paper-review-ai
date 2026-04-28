@@ -126,7 +126,7 @@ class HybridRetriever:
             for doc, meta, dist in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
                 score = 1.0 - min(dist, 1.0)
                 chunk = self._build_chunk_safe(doc, meta)
-                if chunk:
+                if chunk is not None:
                     chunks.append(RetrievedChunk(chunk=chunk, score=score, source="dense"))
             
             return chunks
@@ -145,7 +145,7 @@ class HybridRetriever:
                 raw = self._bm25.get_chunk_by_id(chunk_id)
                 if raw:
                     chunk = self._build_chunk_safe(raw["text"], raw["metadata"])
-                    if chunk:
+                    if chunk is not None:
                         chunks.append(RetrievedChunk(chunk=chunk, score=score, source="bm25"))
             return chunks
         except Exception as e:
@@ -180,16 +180,23 @@ class HybridRetriever:
                 ))
         return fused
     
-    def _build_chunk_safe(self, text: str, meta: dict) -> Optional[PaperChunk]:
+    def _build_chunk_safe(self, text: str, meta: dict):
         """Safely build PaperChunk with fallbacks for missing fields"""
         try:
             # Handle authors - could be string or list
-            authors = meta.get("authors", ["Unknown"])
-            if isinstance(authors, str):
-                authors = [a.strip() for a in authors.split(",")]
-            elif not isinstance(authors, list):
+            authors_raw = meta.get("authors", "Unknown")
+            if isinstance(authors_raw, str):
+                authors = [a.strip() for a in authors_raw.split(",")]
+            elif isinstance(authors_raw, list):
+                authors = authors_raw
+            else:
                 authors = ["Unknown"]
             
+            # Ensure authors is not empty
+            if not authors:
+                authors = ["Unknown"]
+            
+            # Build paper metadata
             paper_meta = PaperMetadata(
                 paper_id=meta.get("paper_id", "unknown"),
                 title=meta.get("title", "Unknown Paper"),
@@ -198,7 +205,8 @@ class HybridRetriever:
                 filename=meta.get("filename", "unknown.txt"),
             )
             
-            return PaperChunk(
+            # Build chunk
+            chunk = PaperChunk(
                 chunk_id=meta.get("chunk_id", f"chunk_{hash(text)}"),
                 paper_id=meta.get("paper_id", "unknown"),
                 text=text,
@@ -211,6 +219,7 @@ class HybridRetriever:
                 has_citations=False,
                 metadata=paper_meta,
             )
+            return chunk
         except Exception as e:
             logger.error(f"Failed to build chunk: {e}")
             return None
