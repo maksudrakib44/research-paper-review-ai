@@ -1,6 +1,6 @@
 """
-src/ingestion/faiss_store.py - Pure Python FAISS Store
-No sklearn, no pyarrow, no DLL issues
+src/ingestion/faiss_store.py - FAISS Vector Store for Streamlit Cloud
+Works without disk persistence
 """
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from collections import Counter
 import math
+import streamlit as st
 
 
 class SimpleEmbedder:
-    """Pure Python TF-IDF embedder - no dependencies"""
+    """Pure Python TF-IDF embedder"""
     
     def __init__(self, max_features: int = 384):
         self.max_features = max_features
@@ -22,33 +23,26 @@ class SimpleEmbedder:
         self.is_fitted = False
     
     def _tokenize(self, text: str) -> List[str]:
-        """Simple tokenization"""
         text = text.lower()
-        # Remove punctuation
         for char in '.,!?;:()[]{}"\'-':
             text = text.replace(char, ' ')
         return [w for w in text.split() if len(w) > 2]
     
     def _compute_tf(self, tokens: List[str]) -> Dict[str, float]:
-        """Compute term frequency"""
         counter = Counter(tokens)
         total = len(tokens)
         return {term: count / total for term, count in counter.items()}
     
     def fit(self, texts: List[str]):
-        """Build vocabulary and compute IDF"""
-        # Count document frequency
         doc_freq = Counter()
         for text in texts:
             unique_terms = set(self._tokenize(text))
             for term in unique_terms:
                 doc_freq[term] += 1
         
-        # Select top features
         most_common = doc_freq.most_common(self.max_features)
         self.vocabulary = {term: idx for idx, (term, _) in enumerate(most_common)}
         
-        # Compute IDF
         total_docs = len(texts)
         for term, idx in self.vocabulary.items():
             df = doc_freq[term]
@@ -57,7 +51,6 @@ class SimpleEmbedder:
         self.is_fitted = True
     
     def transform(self, texts: List[str]) -> np.ndarray:
-        """Convert texts to TF-IDF vectors"""
         vectors = np.zeros((len(texts), len(self.vocabulary)), dtype=np.float32)
         
         for i, text in enumerate(texts):
@@ -69,7 +62,6 @@ class SimpleEmbedder:
                     idx = self.vocabulary[term]
                     vectors[i, idx] = tf_val * self.idf[idx]
         
-        # Normalize
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
         norms[norms == 0] = 1
         vectors = vectors / norms
@@ -77,7 +69,6 @@ class SimpleEmbedder:
         return vectors
     
     def encode(self, texts: List[str], show_progress_bar: bool = False) -> np.ndarray:
-        """Encode texts to vectors"""
         if not texts:
             return np.array([]).reshape(0, self.max_features)
         
@@ -88,20 +79,72 @@ class SimpleEmbedder:
 
 
 class FAISSStore:
-    """FAISS-based vector store - minimal dependencies"""
+    """FAISS vector store - works with Streamlit session state"""
     
     def __init__(self, persist_dir: Path, embedding_model: str = "simple"):
-        self.persist_dir = Path(persist_dir)
-        self.persist_dir.mkdir(parents=True, exist_ok=True)
-        
+        self.persist_dir = persist_dir
         self.embedding_model = SimpleEmbedder()
         self.index = None
         self.documents: List[str] = []
         self.metadatas: List[Dict] = []
         self.ids: List[str] = []
         
-        self._load()
-        print(f"✅ FAISSStore initialized (pure Python)")
+        # For Streamlit, store in session state
+        if st.runtime.exists():
+            self._load_from_session()
+        else:
+            self._load_from_disk()
+    
+    def _load_from_session(self):
+        """Load from Streamlit session state"""
+        if "faiss_documents" not in st.session_state:
+            st.session_state.faiss_documents = []
+            st.session_state.faiss_metadatas = []
+            st.session_state.faiss_ids = []
+            st.session_state.faiss_index = None
+        
+        self.documents = st.session_state.faiss_documents
+        self.metadatas = st.session_state.faiss_metadatas
+        self.ids = st.session_state.faiss_ids
+        self.index = st.session_state.faiss_index
+        
+        if self.documents:
+            print(f"📂 Loaded {len(self.documents)} docs from session")
+    
+    def _save_to_session(self):
+        """Save to Streamlit session state"""
+        if st.runtime.exists():
+            st.session_state.faiss_documents = self.documents
+            st.session_state.faiss_metadatas = self.metadatas
+            st.session_state.faiss_ids = self.ids
+            st.session_state.faiss_index = self.index
+    
+    def _load_from_disk(self):
+        """Fallback: load from disk"""
+        try:
+            metadata_path = self.persist_dir / "metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.ids = data.get("ids", [])
+                    self.documents = data.get("documents", [])
+                    self.metadatas = data.get("metadatas", [])
+                print(f"📂 Loaded {len(self.documents)} docs from disk")
+        except Exception as e:
+            print(f"⚠️ Load failed: {e}")
+    
+    def _save_to_disk(self):
+        """Save to disk as backup"""
+        try:
+            self.persist_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.persist_dir / "metadata.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "ids": self.ids,
+                    "documents": self.documents,
+                    "metadatas": self.metadatas
+                }, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Save to disk failed: {e}")
     
     def add(self, ids: List[str], documents: List[str], metadatas: List[Dict]) -> None:
         if not documents:
@@ -119,9 +162,9 @@ class FAISSStore:
                 import faiss
                 dimension = embeddings.shape[1]
                 self.index = faiss.IndexFlatIP(dimension)
-                print(f"✅ FAISS index created (dimension: {dimension})")
+                print(f"✅ FAISS index created")
             except ImportError:
-                print("⚠️ FAISS not available, using numpy fallback")
+                print("⚠️ FAISS not available")
                 self.index = None
         
         if self.index is not None:
@@ -132,12 +175,17 @@ class FAISSStore:
         self.documents.extend(documents)
         self.metadatas.extend(metadatas)
         
-        self._save()
+        # Save
+        self._save_to_session()
+        self._save_to_disk()
         print(f"✅ Added {len(documents)} chunks. Total: {len(self.ids)}")
     
     def query(self, query_texts: List[str], n_results: int = 10, include: List[str] = None) -> Dict:
         if len(self.ids) == 0:
             return {"documents": [[]], "metadatas": [[]], "distances": [[]], "ids": [[]]}
+        
+        if self.index is None or self.index.ntotal == 0:
+            return self._linear_search(query_texts, n_results, include)
         
         # Generate query embedding
         query_embedding = self.embedding_model.encode(query_texts)
@@ -145,16 +193,53 @@ class FAISSStore:
         if len(query_embedding) == 0:
             return {"documents": [[]], "metadatas": [[]], "distances": [[]], "ids": [[]]}
         
-        # Linear search (fallback if FAISS not available)
-        k = min(n_results, len(self.ids))
+        import faiss
         
-        # Compute cosine similarity with all documents
+        k = min(n_results, self.index.ntotal)
+        scores, indices = self.index.search(query_embedding.astype(np.float32), k)
+        
+        results_ids = []
+        results_docs = []
+        results_metadatas = []
+        results_distances = []
+        
+        for i, idx in enumerate(indices[0]):
+            if idx >= 0 and idx < len(self.ids):
+                results_ids.append(self.ids[idx])
+                results_docs.append(self.documents[idx])
+                results_metadatas.append(self.metadatas[idx])
+                results_distances.append(float(1 - scores[0][i]))
+        
+        result = {}
+        if not include or "documents" in include:
+            result["documents"] = [results_docs]
+        if not include or "metadatas" in include:
+            result["metadatas"] = [results_metadatas]
+        if not include or "distances" in include:
+            result["distances"] = [results_distances]
+        if not include or "ids" in include:
+            result["ids"] = [results_ids]
+        
+        return result
+    
+    def _linear_search(self, query_texts: List[str], n_results: int = 10, include: List[str] = None) -> Dict:
+        """Fallback linear search when FAISS not available"""
+        if not self.documents:
+            return {"documents": [[]], "metadatas": [[]], "distances": [[]], "ids": [[]]}
+        
+        query_embedding = self.embedding_model.encode(query_texts)
+        
+        if len(query_embedding) == 0:
+            return {"documents": [[]], "metadatas": [[]], "distances": [[]], "ids": [[]]}
+        
+        # Compute similarity
         similarities = []
         for doc_vec in self.embedding_model.transform(self.documents):
             sim = np.dot(query_embedding[0], doc_vec)
             similarities.append(sim)
         
-        # Get top k indices
+        # Get top k
+        k = min(n_results, len(self.ids))
         indices = np.argsort(similarities)[::-1][:k]
         scores = [similarities[i] for i in indices]
         
@@ -164,11 +249,10 @@ class FAISSStore:
         results_distances = []
         
         for idx in indices:
-            if idx < len(self.ids):
-                results_ids.append(self.ids[idx])
-                results_docs.append(self.documents[idx])
-                results_metadatas.append(self.metadatas[idx])
-                results_distances.append(float(1 - scores[len(results_distances)]))
+            results_ids.append(self.ids[idx])
+            results_docs.append(self.documents[idx])
+            results_metadatas.append(self.metadatas[idx])
+            results_distances.append(float(1 - scores[len(results_distances)]))
         
         result = {}
         if not include or "documents" in include:
@@ -209,28 +293,3 @@ class FAISSStore:
     
     def count(self) -> int:
         return len(self.ids)
-    
-    def _save(self) -> None:
-        try:
-            with open(self.persist_dir / "metadata.json", "w", encoding="utf-8") as f:
-                json.dump({
-                    "ids": self.ids,
-                    "documents": self.documents,
-                    "metadatas": self.metadatas
-                }, f, indent=2)
-            print(f"💾 Saved {len(self.ids)} documents")
-        except Exception as e:
-            print(f"⚠️ Save failed: {e}")
-    
-    def _load(self) -> None:
-        try:
-            metadata_path = self.persist_dir / "metadata.json"
-            if metadata_path.exists():
-                with open(metadata_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.ids = data.get("ids", [])
-                    self.documents = data.get("documents", [])
-                    self.metadatas = data.get("metadatas", [])
-                print(f"📂 Loaded {len(self.ids)} documents")
-        except Exception as e:
-            print(f"⚠️ Load failed: {e}")
