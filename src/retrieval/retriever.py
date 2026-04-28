@@ -1,46 +1,33 @@
 """
 src/retrieval/retriever.py - Hybrid Retriever for Research Papers
+No Groq dependency - uses only local BM25 and FAISS
 """
 from __future__ import annotations
 
 import time
 from collections import defaultdict
 from typing import Optional
-from groq import Groq
 from loguru import logger
 
 from src.models import PaperChunk, PaperMetadata, RetrievedChunk, RetrievalResult
 
 
+# ── Query Rewriter (Simple version - no LLM fallback) ─────────────────────
 class QueryRewriter:
-    """HyDE query rewriting using Groq"""
+    """
+    Simple query rewriter (no LLM - keeps original query)
+    Can be extended with local models if needed
+    """
     
-    def __init__(self, groq_client: Groq, model: str):
-        self._client = groq_client
-        self._model = model
+    def __init__(self):
+        logger.info("QueryRewriter initialized (simple mode - no LLM)")
     
     def rewrite(self, query: str) -> str:
-        prompt = (
-            "You are a research expert. Write a 2-3 sentence excerpt from an academic "
-            "paper that would directly answer the following question. "
-            "Write only the excerpt — no preamble, no explanation.\n\n"
-            f"Question: {query}"
-        )
-        
-        try:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.3,
-            )
-            hypothesis = response.choices[0].message.content.strip()
-            return hypothesis
-        except Exception as e:
-            logger.warning(f"HyDE rewrite failed: {e}")
-            return query
+        """Returns original query (no rewriting)"""
+        return query
 
 
+# ── BM25 Index ────────────────────────────────────────────────────────────
 class BM25Index:
     """BM25 keyword search index"""
     
@@ -54,6 +41,7 @@ class BM25Index:
         result = collection.get(include=["documents", "metadatas"])
         
         if not result.get("documents"):
+            logger.warning("No documents found for BM25 index")
             return
         
         self._chunks = [
@@ -88,7 +76,9 @@ class BM25Index:
         return None
 
 
+# ── Reciprocal Rank Fusion ────────────────────────────────────────────────
 def reciprocal_rank_fusion(ranked_lists, k=60):
+    """RRF combines multiple ranked lists without normalization"""
     scores = defaultdict(float)
     for ranked in ranked_lists:
         for rank, doc_id in enumerate(ranked, 1):
@@ -96,30 +86,52 @@ def reciprocal_rank_fusion(ranked_lists, k=60):
     return scores
 
 
+# ── Main Retriever ─────────────────────────────────────────────────────────
 class HybridRetriever:
-    def __init__(self, collection, settings, groq_client: Optional[Groq] = None):
+    """
+    Hybrid retriever combining dense (FAISS) and sparse (BM25) search.
+    No LLM dependency - works completely offline.
+    """
+    
+    def __init__(self, collection, settings, groq_client=None):
+        """
+        Initialize hybrid retriever.
+        
+        Args:
+            collection: FAISS vector store
+            settings: Application settings
+            groq_client: Ignored (kept for compatibility)
+        """
         self._col = collection
         self._settings = settings
         self._bm25 = BM25Index()
-        self._query_rewriter = QueryRewriter(groq_client, settings.llm_model) if groq_client else None
+        # Use simple query rewriter (no LLM)
+        self._query_rewriter = QueryRewriter()
+        logger.info("HybridRetriever initialized (no LLM dependency)")
     
     def build_index(self):
+        """Build BM25 index from collection"""
         if self._col.count() > 0:
             self._bm25.build(self._col)
+            logger.info(f"BM25 index built with {self._col.count()} chunks")
+        else:
+            logger.warning("No documents to build index")
     
     def retrieve(self, query: str) -> RetrievalResult:
+        """Retrieve relevant chunks for query"""
         t0 = time.perf_counter()
         
         if self._col.count() == 0:
+            logger.warning("No documents in collection")
             return RetrievalResult(query=query, chunks=[], retrieval_latency_ms=0)
         
-        # HyDE rewriting
-        search_text = self._query_rewriter.rewrite(query) if self._query_rewriter else query
+        # Simple query (no HyDE rewrite to avoid LLM dependency)
+        search_text = self._query_rewriter.rewrite(query)
         
-        # Dense retrieval
+        # Dense retrieval (FAISS)
         dense_chunks = self._dense_search(search_text, self._settings.top_k_dense)
         
-        # BM25 retrieval
+        # BM25 retrieval (keyword)
         bm25_chunks = self._bm25_search(query, self._settings.top_k_bm25)
         
         # Fusion
@@ -128,9 +140,15 @@ class HybridRetriever:
         
         elapsed = (time.perf_counter() - t0) * 1000
         
+        logger.info(f"Retrieved {len(final)} chunks in {elapsed:.0f}ms")
+        
         return RetrievalResult(query=query, chunks=final, retrieval_latency_ms=elapsed)
     
     def _dense_search(self, text: str, top_k: int):
+        """Dense retrieval using FAISS"""
+        if self._col.count() == 0:
+            return []
+        
         try:
             result = self._col.query(
                 query_texts=[text],
@@ -138,29 +156,44 @@ class HybridRetriever:
                 include=["documents", "metadatas", "distances"],
             )
             
-            if not result.get("documents"):
+            if not result.get("documents") or not result["documents"][0]:
                 return []
             
             chunks = []
             for doc, meta, dist in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
+                # Convert distance to similarity score (0-1 range)
                 score = 1.0 - min(dist, 1.0)
-                chunks.append(RetrievedChunk(chunk=self._build_chunk(doc, meta), score=score, source="dense"))
-            
+                chunks.append(RetrievedChunk(
+                    chunk=self._build_chunk(doc, meta),
+                    score=score,
+                    source="dense"
+                ))
             return chunks
         except Exception as e:
             logger.error(f"Dense search failed: {e}")
             return []
     
     def _bm25_search(self, text: str, top_k: int):
+        """BM25 keyword search"""
+        if self._col.count() == 0:
+            return []
+        
         results = self._bm25.query(text, top_k)
         chunks = []
         for chunk_id, score in results:
             raw = self._bm25.get_chunk_by_id(chunk_id)
             if raw:
-                chunks.append(RetrievedChunk(chunk=self._build_chunk(raw["text"], raw["metadata"]), score=score, source="bm25"))
+                chunks.append(RetrievedChunk(
+                    chunk=self._build_chunk(raw["text"], raw["metadata"]),
+                    score=score,
+                    source="bm25"
+                ))
         return chunks
     
     def _fuse(self, dense, bm25):
+        """Reciprocal Rank Fusion to combine results"""
+        if not dense and not bm25:
+            return []
         if not dense:
             return bm25
         if not bm25:
@@ -172,34 +205,49 @@ class HybridRetriever:
         
         rrf_scores = reciprocal_rank_fusion([dense_ids, bm25_ids])
         
-        chunk_map = {c.chunk.chunk_id: c for c in dense + bm25}
+        # Build lookup map
+        chunk_map = {}
+        for c in dense + bm25:
+            if c.chunk.chunk_id not in chunk_map:
+                chunk_map[c.chunk.chunk_id] = c
         
         fused = []
         for chunk_id, rrf_score in sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True):
             if chunk_id in chunk_map:
                 orig = chunk_map[chunk_id]
                 blended = alpha * rrf_score + (1 - alpha) * orig.score
-                fused.append(RetrievedChunk(chunk=orig.chunk, score=blended, source=orig.source))
-        
+                fused.append(RetrievedChunk(
+                    chunk=orig.chunk,
+                    score=blended,
+                    source=orig.source
+                ))
         return fused
     
-    def _build_chunk(self, text: str, meta: dict):
+    def _build_chunk(self, text: str, meta: dict) -> PaperChunk:
+        """Build PaperChunk from metadata"""
         from src.models import PaperMetadata, PaperChunk, SectionType
         
         paper_meta = PaperMetadata(
             paper_id=meta.get("paper_id", "unknown"),
             title=meta.get("title", "Unknown"),
-            authors=meta.get("authors", "").split(", "),
+            authors=meta.get("authors", "").split(", ") if meta.get("authors") else [],
             year=int(meta.get("year", 0)) if meta.get("year") else None,
             filename=meta.get("filename", "unknown.pdf"),
             tags=meta.get("tags", "").split(", ") if meta.get("tags") else [],
         )
         
+        # Get section type from metadata or default to OTHER
+        section_type_str = meta.get("section_type", "other")
+        try:
+            section_type = SectionType(section_type_str)
+        except ValueError:
+            section_type = SectionType.OTHER
+        
         return PaperChunk(
             chunk_id=meta.get("chunk_id", ""),
             paper_id=meta.get("paper_id", "unknown"),
             text=text,
-            section_type=SectionType(meta.get("section_type", "other")),
+            section_type=section_type,
             section_title=meta.get("section_title", ""),
             chunk_index=int(meta.get("chunk_index", 0)),
             page_number=1,
