@@ -163,7 +163,7 @@ with st.sidebar:
     # Navigation
     page = st.radio(
         "📖 **Navigation**",
-        ["💬 Chat with Papers", "📄 Upload Papers", "🎯 Evaluate Quality", "📋 Ground Truth"],
+        ["📄 Upload Papers", "💬 Chat with Papers", "🎯 Evaluate Quality", "📋 Ground Truth"],
         label_visibility="collapsed"
     )
     

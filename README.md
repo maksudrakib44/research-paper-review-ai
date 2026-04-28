@@ -2,7 +2,7 @@
 ```markdown
 # 📚 Research Paper RAG System
 
-A production-ready **Retrieval-Augmented Generation (RAG)** system for academic research papers. Upload PDF papers, ask questions, and get cited answers with high accuracy.
+A production-ready **Retrieval-Augmented Generation (RAG)** system for academic research papers. Upload PDF/TXT papers, ask questions, and get accurate answers with citations.
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://research-paper-review-ai.streamlit.app)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -10,21 +10,22 @@ A production-ready **Retrieval-Augmented Generation (RAG)** system for academic 
 
 ## ✨ Features
 
-- 📄 **Smart Paper Ingestion** - Process PDF research papers with section-aware chunking
-- 🔍 **Hybrid Search** - Combines semantic (dense) + keyword (BM25) retrieval
-- 🎓 **Academic Metrics** - Citation accuracy, factual consistency, RAGAS evaluation
+- 📄 **Smart Paper Ingestion** - Process PDF and TXT files with intelligent chunking
+- 🔍 **Hybrid Search** - Combines dense (TF-IDF) + keyword (BM25) retrieval
+- 🎓 **Ground Truth Evaluation** - RAGAS-style quality metrics (faithfulness, precision, recall)
 - 🚀 **Free LLM** - Powered by Groq's Llama 3.3 70B (free tier)
-- 📊 **Ground Truth Evaluation** - Quality monitoring with labeled Q&A pairs
-- 💬 **Interactive UI** - Streamlit interface with citations and confidence scores
+- 📊 **Quality Monitoring** - Track answer quality with labeled Q&A pairs
+- 💬 **Modern UI** - Clean Streamlit interface with confidence scores and references
+- ⚡ **Lightweight** - Pure Python TF-IDF embeddings, no heavy dependencies
 
 ## 🏗️ Architecture
 
 ```
-User Question → HyDE Rewriting → Dense + BM25 Search → RRF Fusion → Groq LLM → Answer
-                                      ↓
-                             Section-Aware Chunking
-                                      ↓
-                                  FAISS Index
+User Question → Retrieve Relevant Chunks → Build Context → Groq LLM → Answer + Citations
+                        ↓
+              FAISS Vector Search + BM25
+                        ↓
+                    TF-IDF Embeddings
 ```
 
 ## 🚀 Quick Start
@@ -53,7 +54,7 @@ streamlit run app.py
 
 ### Deployed Version
 
-Visit: [https://research-paper-review-ai.streamlit.app/](https://research-paper-review-ai.streamlit.app)
+Visit: [https://paper-review-ai.streamlit.app/](https://paper-review-ai.streamlit.app/)
 
 ## 📁 Project Structure
 
@@ -63,26 +64,28 @@ research-paper-rag/
 ├── config/
 │   └── settings.py           # Configuration
 ├── src/
-│   ├── ingestion/            # PDF processing & chunking
-│   │   ├── faiss_store.py    # Vector database
-│   │   ├── ingester.py       # Document ingestion
-│   │   └── section_chunker.py # Academic section splitting
+│   ├── ingestion/
+│   │   ├── faiss_store.py    # FAISS vector store (TF-IDF)
+│   │   └── ingester.py       # PDF/TXT ingestion
 │   ├── retrieval/
 │   │   └── retriever.py      # Hybrid search (dense + BM25)
 │   ├── generation/
 │   │   └── generator.py      # Groq LLM integration
 │   └── validation/
-│       ├── ground_truth.py   # Q&A storage
-│       └── metrics.py        # RAGAS evaluation
+│       └── ground_truth.py   # GT store & RAG evaluator
+├── data/
+│   ├── chroma_db/            # FAISS index storage
+│   ├── ground_truth/         # Q&A pairs
+│   └── papers/               # Uploaded papers
 ├── requirements.txt
 └── .env.example
 ```
 
 ## 🎯 Usage Examples
 
-### Upload a Paper
-1. Go to **📄 Papers** tab
-2. Upload a PDF research paper
+### Upload Papers
+1. Go to **📄 Upload Papers** tab
+2. Upload PDF or TXT files
 3. Click "Ingest Papers"
 
 ### Ask Questions
@@ -90,76 +93,100 @@ Go to **💬 Chat** tab and ask:
 
 | Question Type | Example |
 |---------------|---------|
-| Methodology | "What architecture was used for segmentation?" |
-| Results | "What was the Dice coefficient achieved?" |
-| Dataset | "Which dataset was used for validation?" |
-| Authors | "Who are the authors of this paper?" |
+| Paper Title | "What is the title of this paper?" |
+| Authors | "Who are the authors?" |
+| Results | "What is the dice coefficient?" |
+| Dataset | "Which dataset was used?" |
+| Methodology | "What architecture was used?" |
 
 ### Evaluate Quality
 1. Go to **📋 Ground Truth** tab
 2. Add labeled Q&A pairs
-3. Go to **🎯 Evaluation** tab
-4. Run the evaluation suite
+3. Go to **🎯 Evaluate Quality** tab
+4. Run evaluation suite
 
 ## 🔧 Configuration
 
-Create `.env` file (copy from `.env.example`):
+Create `.env` file:
 
 ```env
 GROQ_API_KEY=gsk_your_key_here
 LLM_MODEL=llama-3.3-70b-versatile
-CHUNK_SIZE=1024
-TOP_K_DENSE=15
-TOP_K_RERANK=8
+EMBEDDING_MODEL=simple
+CHUNK_SIZE=1500
+CHUNK_OVERLAP=200
+TOP_K_DENSE=5
+TOP_K_RERANK=3
 HYBRID_ALPHA=0.6
+GT_EVAL_THRESHOLD=0.75
 ```
 
 ## 📊 Evaluation Metrics
 
-| Metric | Description |
-|--------|-------------|
-| **Faithfulness** | Answer grounded in retrieved context? |
-| **Context Precision** | Retrieved chunks relevant to question? |
-| **Citation Accuracy** | Are (Author, Year) citations correct? |
-| **Factual Consistency** | No hallucinated information? |
-| **Answer Correctness** | Matches ground truth answer? |
+| Metric | Weight | Description |
+|--------|--------|-------------|
+| **Faithfulness** | 35% | Answer grounded in retrieved context? |
+| **Context Precision** | 25% | Retrieved chunks relevant to question? |
+| **Context Recall** | 20% | All relevant information retrieved? |
+| **Answer Correctness** | 20% | Matches ground truth answer? |
+
+**Pass Threshold:** 75% overall score
 
 ## 🧠 Core RAG Concepts
 
 | Concept | Implementation |
 |---------|----------------|
-| **Chunking** | Section-aware sliding window |
-| **Embedding** | all-MiniLM-L6-v2 (384-dim) |
+| **Chunking** | Overlapping sliding window (1500 chars, 200 overlap) |
+| **Embedding** | Pure Python TF-IDF (384 features) |
 | **Dense Search** | FAISS with cosine similarity |
 | **Keyword Search** | BM25 algorithm |
 | **Fusion** | Reciprocal Rank Fusion (RRF) |
-| **Query Rewriting** | HyDE (Hypothetical Document Embeddings) |
-| **LLM** | Groq Llama 3.3 70B |
+| **LLM** | Groq Llama 3.3 70B (free tier) |
+| **Evaluation** | RAGAS-style ground truth metrics |
 
 ## 🔑 Getting a Groq API Key
 
 1. Go to [Groq Console](https://console.groq.com)
-2. Sign up for a free account
-3. Navigate to API Keys
+2. Sign up for a free account (no credit card required)
+3. Navigate to **API Keys**
 4. Create a new key (starts with `gsk_`)
-5. Copy the key to your `.env` file
-
-## 🧪 Running Tests
-
-```bash
-pytest tests/ -v
-```
+5. Copy the key to your `.env` file or Streamlit secrets
 
 ## 📈 Performance
 
 | Metric | Value |
 |--------|-------|
-| Ingestion speed | ~100 chunks/second |
+| Ingestion | ~100 chunks/second |
 | Query latency | 2-3 seconds |
 | Context window | 8,192 tokens |
-| Max paper size | Unlimited (chunked) |
+| File support | PDF, TXT (up to 200MB) |
+| Chunk size | 1,500 characters |
+
+## 🛠️ Technologies Used
+
+- **Groq** - Fast, free LLM inference (Llama 3.3 70B)
+- **FAISS** - Efficient vector similarity search
+- **BM25** - Keyword-based retrieval
+- **Streamlit** - Interactive web UI
+- **Pydantic** - Type-safe configuration
+- **FAISS** - Vector database
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Open a Pull Request
 
 
+
+## 🙏 Acknowledgments
+
+- [Groq](https://groq.com) for free LLM API
+- [FAISS](https://github.com/facebookresearch/faiss) for vector search
+- [Streamlit](https://streamlit.io) for the UI framework
 
 ## 📧 Contact
 
@@ -168,6 +195,7 @@ Md. Maksudul Haque - [GitHub](https://github.com/maksudrakib44)
 ---
 
 **⭐ Star this repository if you find it useful!**
+
+Made with 💖 by Md. Maksudul Haque
 ```
 
----
