@@ -553,7 +553,6 @@ elif page == "📋 Ground Truth":
 st.markdown("""
 <div class="footer">
     <p>🔬 <strong>Research Paper RAG</strong> | AI-Powered Academic Research Assistant</p>
-    <p style="font-size: 0.8rem;">Powered by Groq Llama 3.3 70B | FAISS Vector Search | RAG Ground Truth Evaluation</p>
             <p style="font-size: 0.8rem;">Made with 💖 by Md. Maksudul Haque</p>
 </div>
 """, unsafe_allow_html=True)
