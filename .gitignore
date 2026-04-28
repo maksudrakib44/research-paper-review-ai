@@ -1,37 +1,167 @@
-# Virtual Environment (NEVER commit this)
+# ============================================
+# Python
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ============================================
+# Virtual Environment
+# ============================================
 venv/
 .venv/
 env/
 ENV/
+env.bak/
+venv.bak/
+.virtualenv/
 
-# Python
-__pycache__/
-*.py[cod]
-*.so
-.Python
-
-# IDE
+# ============================================
+# IDE and Editor Files
+# ============================================
+# VSCode
 .vscode/
-.idea/
-.DS_Store
-*.swp
+.history/
+*.code-workspace
 
-# Project data
+# PyCharm
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================
+# Project Specific - Data Files
+# ============================================
+# Vector database (FAISS/ChromaDB)
 data/chroma_db/
 data/chroma_db/*
 !data/chroma_db/.gitkeep
-data/papers/*.pdf
+
+# Uploaded papers
+data/papers/
+data/papers/*
 !data/papers/.gitkeep
+
+# Ground truth files (keep structure)
+data/ground_truth/*.json
+!data/ground_truth/.gitkeep
+!data/ground_truth/example_gt.json
+
+# Logs
 logs/
 *.log
+*.log.*
+logs/*.log
+!logs/.gitkeep
 
-# Environment secrets
+# ============================================
+# Environment and Secrets
+# ============================================
 .env
-.streamlit/
+.env.local
+.env.*.local
+*.key
+*.pem
+*.crt
+secrets/
+.streamlit/secrets.toml
 
-# Large files
+# ============================================
+# Cache and Temporary Files
+# ============================================
+*.cache
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+.cache/
+.streamlit/cache
+
+# ============================================
+# Build and Distribution
+# ============================================
+build/
+dist/
+*.egg-info/
+*.egg
+MANIFEST
+*.whl
+*.tar.gz
+
+# ============================================
+# OS Generated Files
+# ============================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
 *.dll
 *.exe
-*.bin
-*.tmp
-*.cache
+*.pdb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+.directory
+*.pid
+*.sock
+
+# ============================================
+# Model files (if downloaded)
+# ============================================
+*.h5
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.onnx
+models/
+!models/.gitkeep
+
+# ============================================
+# Backup files
+# ============================================
+*.backup
+*.old
+*.orig
+*.rej
+
+# ============================================
+# Research Paper RAG Specific
+# ============================================
+# FAISS index files
+*.faiss
+*.index
+
+# ChromaDB files
+chroma/
+.chroma/
+
+# Large downloaded papers
+data/papers/*.pdf
+data/papers/*.zip
+!data/papers/sample_*.txt

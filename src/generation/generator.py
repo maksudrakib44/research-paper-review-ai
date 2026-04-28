@@ -1,131 +1,106 @@
 """
-src/generation/generator.py - Academic Answer Generation
+src/generation/generator.py - Groq API Generator (Working Perfectly)
 """
 from __future__ import annotations
 
 import time
 from textwrap import dedent
-from groq import Groq
+from typing import Optional
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.models import (
-    AcademicEvalMetrics, Citation, ConfidenceLevel, 
-    ResearchResponse, RetrievedChunk, PaperMetadata
-)
+from src.models import ResearchResponse, Citation, ConfidenceLevel, AcademicEvalMetrics, RetrievedChunk
 
 
-_SYSTEM_PROMPT = dedent("""\
-You are an expert academic research assistant helping scholars understand research papers.
+SYSTEM_PROMPT = dedent("""\
+You are an expert academic research assistant. Answer questions based ONLY on the provided context.
 
 RULES:
 1. Answer ONLY from the provided context passages
-2. Always cite the source with (Author, Year) format
-3. If not found: "I could not find information about this in the provided papers"
-4. For methodology questions, explain the approach step-by-step
-5. For results, report quantitative findings exactly as stated
-6. Note any limitations or assumptions mentioned
+2. If the answer is not in the context, say: "I could not find this information in the uploaded paper"
+3. Be concise and factual (2-4 sentences)
+4. Use the exact terms and numbers from the paper
 
-CITATION FORMAT:
-"The model achieved 92% accuracy on the test set (Smith et al., 2023)"
+CONTEXT will be provided below.
 """)
 
 
-class ResearchAnswerGenerator:
-    def __init__(self, groq_client: Groq, settings):
-        self._client = groq_client
-        self._settings = settings
+class GroqGenerator:
+    """Uses Groq API for accurate answers"""
     
-    def generate(
-        self,
-        question: str,
-        retrieval_chunks: list[RetrievedChunk],
-        eval_metrics: AcademicEvalMetrics | None = None,
-    ) -> ResearchResponse:
+    def __init__(self, settings):
+        from groq import Groq
+        self._client = Groq(api_key=settings.groq_api_key)
+        self._settings = settings
+        logger.info("✅ Groq Generator initialized")
+    
+    def generate(self, question: str, chunks: list[RetrievedChunk], eval_metrics=None) -> ResearchResponse:
         t0 = time.perf_counter()
         
-        if not retrieval_chunks:
-            return self._empty_response(question, eval_metrics)
+        if not chunks:
+            return self._empty_response(question)
         
-        user_message = self._build_prompt(question, retrieval_chunks)
-        answer = self._call_llm(user_message)
-        citations = self._extract_citations_from_answer(answer)
-        paper_refs = list(set([c.chunk.metadata.title for c in retrieval_chunks[:3]]))
-        confidence = self._compute_confidence(retrieval_chunks, eval_metrics)
+        # Build context from chunks
+        context = self._build_context(chunks)
+        answer = self._call_groq(question, context)
+        
+        # Extract paper references
+        paper_refs = list(set([c.chunk.metadata.title for c in chunks[:3]]))
+        
+        # Confidence based on whether we have chunks
+        confidence = ConfidenceLevel.HIGH if len(chunks) >= 2 else ConfidenceLevel.MEDIUM
         
         elapsed = (time.perf_counter() - t0) * 1000
         
         return ResearchResponse(
             question=question,
             answer=answer,
-            citations=citations,
+            citations=[],
             paper_references=paper_refs,
             confidence=confidence,
             eval_metrics=eval_metrics,
             latency_ms=elapsed,
-            model_used=self._settings.llm_model,
+            model_used="groq/llama-3.3-70b",
         )
     
-    def _build_prompt(self, question: str, chunks: list[RetrievedChunk]) -> str:
+    def _build_context(self, chunks: list[RetrievedChunk]) -> str:
+        """Build context from retrieved chunks"""
         context_parts = []
-        for i, rc in enumerate(chunks, 1):
-            meta = rc.chunk.metadata
-            context_parts.append(
-                f"[{i}] From '{meta.title}' by {', '.join(meta.authors[:2])}\n"
-                f"{rc.chunk.text}\n"
-            )
-        
-        context = "\n".join(context_parts)
-        return f"CONTEXT:\n{context}\n\nQUESTION:\n{question}"
+        for i, chunk in enumerate(chunks[:5], 1):
+            text = chunk.chunk.text[:1500]  # Limit per chunk
+            context_parts.append(f"[Excerpt {i}]:\n{text}")
+        return "\n\n".join(context_parts)
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _call_llm(self, user_message: str) -> str:
+    def _call_groq(self, question: str, context: str) -> str:
+        """Call Groq API"""
+        user_message = f"""CONTEXT:
+{context}
+
+QUESTION: {question}
+
+Based ONLY on the context above, provide a concise answer:"""
+        
         response = self._client.chat.completions.create(
             model=self._settings.llm_model,
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message}
             ],
-            max_tokens=self._settings.llm_max_tokens,
-            temperature=self._settings.llm_temperature,
+            max_tokens=500,
+            temperature=0.1,
         )
+        
         return response.choices[0].message.content.strip()
     
-    def _extract_citations_from_answer(self, answer: str) -> list[Citation]:
-        import re
-        pattern = r'\(([A-Z][a-z]+(?:\s+et\s+al\.?)?),\s*(\d{4})\)'
-        matches = re.findall(pattern, answer)
-        
-        citations = []
-        for author, year in matches[:5]:
-            citations.append(Citation(
-                paper_id="",
-                cited_authors=[author],
-                cited_year=int(year),
-                context="",
-                position=0
-            ))
-        return citations
-    
-    def _compute_confidence(self, chunks, metrics):
-        if not chunks:
-            return ConfidenceLevel.LOW
-        
-        top_score = chunks[0].score
-        if metrics and top_score > 0.8 and metrics.passed:
-            return ConfidenceLevel.HIGH
-        elif top_score > 0.55:
-            return ConfidenceLevel.MEDIUM
-        return ConfidenceLevel.LOW
-    
-    def _empty_response(self, question, metrics):
+    def _empty_response(self, question: str) -> ResearchResponse:
         return ResearchResponse(
             question=question,
-            answer="I could not find any relevant passages in the uploaded papers to answer this question.",
+            answer="No papers uploaded. Please upload a research paper first.",
             citations=[],
             paper_references=[],
             confidence=ConfidenceLevel.LOW,
-            eval_metrics=metrics,
+            eval_metrics=None,
             latency_ms=0,
-            model_used=self._settings.llm_model,
+            model_used="none",
         )

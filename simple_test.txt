@@ -1,0 +1,17 @@
+BRAIN TUMOR DETECTION USING DEEP LEARNING
+
+Authors: Md. Maksudul Haque, Md. Mostakim Rahman Shipon, Nadira Jahan Ony, Syed Ahsanul Kabir, Umme Habiba
+
+Abstract: This paper presents a segmentation-guided deep learning framework for early brain tumor detection in MRI scans using U-Net and CNN.
+
+Key Results:
+- Dice Coefficient: 0.9234
+- Classification Accuracy: 97.36%
+- ROC-AUC: 0.9963
+- Specificity: 99.88%
+
+Methodology: The framework uses U-Net for tumor segmentation followed by CNN classification on extracted ROIs.
+
+Dataset: BraTS 2020 dataset with 57,195 MRI slices from 369 patients.
+
+Conclusion: The proposed method achieves state-of-the-art performance with enhanced interpretability.

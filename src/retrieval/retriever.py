@@ -6,39 +6,9 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from typing import Optional
-from groq import Groq
 from loguru import logger
 
-from src.models import PaperChunk, PaperMetadata, RetrievedChunk, RetrievalResult
-
-
-class QueryRewriter:
-    """HyDE query rewriting using Groq"""
-    
-    def __init__(self, groq_client: Groq, model: str):
-        self._client = groq_client
-        self._model = model
-    
-    def rewrite(self, query: str) -> str:
-        prompt = (
-            "You are a research expert. Write a 2-3 sentence excerpt from an academic "
-            "paper that would directly answer the following question. "
-            "Write only the excerpt — no preamble, no explanation.\n\n"
-            f"Question: {query}"
-        )
-        
-        try:
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.3,
-            )
-            hypothesis = response.choices[0].message.content.strip()
-            return hypothesis
-        except Exception as e:
-            logger.warning(f"HyDE rewrite failed: {e}")
-            return query
+from src.models import PaperChunk, PaperMetadata, RetrievedChunk, RetrievalResult, SectionType
 
 
 class BM25Index:
@@ -51,35 +21,47 @@ class BM25Index:
     def build(self, collection):
         from rank_bm25 import BM25Okapi
         
-        result = collection.get(include=["documents", "metadatas"])
-        
-        if not result.get("documents"):
-            return
-        
-        self._chunks = [
-            {"id": rid, "text": doc, "metadata": meta}
-            for rid, doc, meta in zip(result["ids"], result["documents"], result["metadatas"])
-        ]
-        
-        tokenized = [c["text"].lower().split() for c in self._chunks]
-        self._index = BM25Okapi(tokenized)
-        logger.info(f"Built BM25 index over {len(self._chunks)} chunks")
+        try:
+            result = collection.get(include=["documents", "metadatas"])
+            
+            if not result.get("documents") or len(result["documents"]) == 0:
+                logger.warning("No documents found for BM25")
+                return
+            
+            self._chunks = [
+                {"id": rid, "text": doc, "metadata": meta}
+                for rid, doc, meta in zip(result["ids"], result["documents"], result["metadatas"])
+            ]
+            
+            tokenized = [c["text"].lower().split() for c in self._chunks]
+            self._index = BM25Okapi(tokenized)
+            logger.info(f"BM25 built over {len(self._chunks)} chunks")
+        except Exception as e:
+            logger.error(f"BM25 build failed: {e}")
     
     def query(self, text: str, top_k: int):
         if self._index is None:
             return []
         
-        scores = self._index.get_scores(text.lower().split())
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-        
-        if not top_indices:
+        try:
+            scores = self._index.get_scores(text.lower().split())
+            
+            if not scores:
+                return []
+            
+            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+            
+            if not top_indices:
+                return []
+            
+            max_score = scores[top_indices[0]]
+            if max_score == 0:
+                return []
+            
+            return [(self._chunks[i]["id"], float(scores[i]) / max_score) for i in top_indices]
+        except Exception as e:
+            logger.error(f"BM25 query failed: {e}")
             return []
-        
-        max_score = scores[top_indices[0]]
-        if max_score == 0:
-            return []
-        
-        return [(self._chunks[i]["id"], float(scores[i]) / max_score) for i in top_indices]
     
     def get_chunk_by_id(self, chunk_id):
         for c in self._chunks:
@@ -97,11 +79,10 @@ def reciprocal_rank_fusion(ranked_lists, k=60):
 
 
 class HybridRetriever:
-    def __init__(self, collection, settings, groq_client: Optional[Groq] = None):
+    def __init__(self, collection, settings, groq_client=None):
         self._col = collection
         self._settings = settings
         self._bm25 = BM25Index()
-        self._query_rewriter = QueryRewriter(groq_client, settings.llm_model) if groq_client else None
     
     def build_index(self):
         if self._col.count() > 0:
@@ -113,11 +94,8 @@ class HybridRetriever:
         if self._col.count() == 0:
             return RetrievalResult(query=query, chunks=[], retrieval_latency_ms=0)
         
-        # HyDE rewriting
-        search_text = self._query_rewriter.rewrite(query) if self._query_rewriter else query
-        
         # Dense retrieval
-        dense_chunks = self._dense_search(search_text, self._settings.top_k_dense)
+        dense_chunks = self._dense_search(query, self._settings.top_k_dense)
         
         # BM25 retrieval
         bm25_chunks = self._bm25_search(query, self._settings.top_k_bm25)
@@ -131,6 +109,9 @@ class HybridRetriever:
         return RetrievalResult(query=query, chunks=final, retrieval_latency_ms=elapsed)
     
     def _dense_search(self, text: str, top_k: int):
+        if self._col.count() == 0:
+            return []
+        
         try:
             result = self._col.query(
                 query_texts=[text],
@@ -138,13 +119,15 @@ class HybridRetriever:
                 include=["documents", "metadatas", "distances"],
             )
             
-            if not result.get("documents"):
+            if not result.get("documents") or not result["documents"][0]:
                 return []
             
             chunks = []
             for doc, meta, dist in zip(result["documents"][0], result["metadatas"][0], result["distances"][0]):
                 score = 1.0 - min(dist, 1.0)
-                chunks.append(RetrievedChunk(chunk=self._build_chunk(doc, meta), score=score, source="dense"))
+                chunk = self._build_chunk_safe(doc, meta)
+                if chunk is not None:
+                    chunks.append(RetrievedChunk(chunk=chunk, score=score, source="dense"))
             
             return chunks
         except Exception as e:
@@ -152,15 +135,26 @@ class HybridRetriever:
             return []
     
     def _bm25_search(self, text: str, top_k: int):
-        results = self._bm25.query(text, top_k)
-        chunks = []
-        for chunk_id, score in results:
-            raw = self._bm25.get_chunk_by_id(chunk_id)
-            if raw:
-                chunks.append(RetrievedChunk(chunk=self._build_chunk(raw["text"], raw["metadata"]), score=score, source="bm25"))
-        return chunks
+        if self._col.count() == 0:
+            return []
+        
+        try:
+            results = self._bm25.query(text, top_k)
+            chunks = []
+            for chunk_id, score in results:
+                raw = self._bm25.get_chunk_by_id(chunk_id)
+                if raw:
+                    chunk = self._build_chunk_safe(raw["text"], raw["metadata"])
+                    if chunk is not None:
+                        chunks.append(RetrievedChunk(chunk=chunk, score=score, source="bm25"))
+            return chunks
+        except Exception as e:
+            logger.error(f"BM25 search failed: {e}")
+            return []
     
     def _fuse(self, dense, bm25):
+        if not dense and not bm25:
+            return []
         if not dense:
             return bm25
         if not bm25:
@@ -179,32 +173,53 @@ class HybridRetriever:
             if chunk_id in chunk_map:
                 orig = chunk_map[chunk_id]
                 blended = alpha * rrf_score + (1 - alpha) * orig.score
-                fused.append(RetrievedChunk(chunk=orig.chunk, score=blended, source=orig.source))
-        
+                fused.append(RetrievedChunk(
+                    chunk=orig.chunk,
+                    score=blended,
+                    source=orig.source
+                ))
         return fused
     
-    def _build_chunk(self, text: str, meta: dict):
-        from src.models import PaperMetadata, PaperChunk, SectionType
-        
-        paper_meta = PaperMetadata(
-            paper_id=meta.get("paper_id", "unknown"),
-            title=meta.get("title", "Unknown"),
-            authors=meta.get("authors", "").split(", "),
-            year=int(meta.get("year", 0)) if meta.get("year") else None,
-            filename=meta.get("filename", "unknown.pdf"),
-            tags=meta.get("tags", "").split(", ") if meta.get("tags") else [],
-        )
-        
-        return PaperChunk(
-            chunk_id=meta.get("chunk_id", ""),
-            paper_id=meta.get("paper_id", "unknown"),
-            text=text,
-            section_type=SectionType(meta.get("section_type", "other")),
-            section_title=meta.get("section_title", ""),
-            chunk_index=int(meta.get("chunk_index", 0)),
-            page_number=1,
-            token_count=len(text) // 4,
-            has_equations=meta.get("has_equations", False),
-            has_citations=meta.get("has_citations", False),
-            metadata=paper_meta,
-        )
+    def _build_chunk_safe(self, text: str, meta: dict):
+        """Safely build PaperChunk with fallbacks for missing fields"""
+        try:
+            # Handle authors - could be string or list
+            authors_raw = meta.get("authors", "Unknown")
+            if isinstance(authors_raw, str):
+                authors = [a.strip() for a in authors_raw.split(",")]
+            elif isinstance(authors_raw, list):
+                authors = authors_raw
+            else:
+                authors = ["Unknown"]
+            
+            # Ensure authors is not empty
+            if not authors:
+                authors = ["Unknown"]
+            
+            # Build paper metadata
+            paper_meta = PaperMetadata(
+                paper_id=meta.get("paper_id", "unknown"),
+                title=meta.get("title", "Unknown Paper"),
+                authors=authors,
+                year=meta.get("year", None),
+                filename=meta.get("filename", "unknown.txt"),
+            )
+            
+            # Build chunk
+            chunk = PaperChunk(
+                chunk_id=meta.get("chunk_id", f"chunk_{hash(text)}"),
+                paper_id=meta.get("paper_id", "unknown"),
+                text=text,
+                section_type=SectionType.OTHER,
+                section_title=meta.get("section_title", "Content"),
+                chunk_index=int(meta.get("chunk_index", 0)),
+                page_number=int(meta.get("page_number", 1)),
+                token_count=max(1, len(text) // 4),
+                has_equations=False,
+                has_citations=False,
+                metadata=paper_meta,
+            )
+            return chunk
+        except Exception as e:
+            logger.error(f"Failed to build chunk: {e}")
+            return None

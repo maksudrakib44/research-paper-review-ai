@@ -1,0 +1,47 @@
+[
+  {
+    "gt_id": "gt_001",
+    "question": "What is the dice coefficient?",
+    "ground_truth_answer": "0.9234",
+    "domain_tags": ["segmentation", "metric"],
+    "question_type": "numeric",
+    "created_by": "system",
+    "created_at": "2025-01-01T00:00:00"
+  },
+  {
+    "gt_id": "gt_002",
+    "question": "What is the classification accuracy?",
+    "ground_truth_answer": "97.36%",
+    "domain_tags": ["classification", "metric"],
+    "question_type": "numeric",
+    "created_by": "system",
+    "created_at": "2025-01-01T00:00:00"
+  },
+  {
+    "gt_id": "gt_003",
+    "question": "What dataset was used?",
+    "ground_truth_answer": "BraTS 2020",
+    "domain_tags": ["dataset"],
+    "question_type": "factual",
+    "created_by": "system",
+    "created_at": "2025-01-01T00:00:00"
+  },
+  {
+    "gt_id": "gt_004",
+    "question": "What is the paper title?",
+    "ground_truth_answer": "Segmentation-Guided Deep Learning Framework for Early Brain Tumor Detection in MRI Scans",
+    "domain_tags": ["title"],
+    "question_type": "factual",
+    "created_by": "system",
+    "created_at": "2025-01-01T00:00:00"
+  },
+  {
+    "gt_id": "gt_005",
+    "question": "Who are the authors?",
+    "ground_truth_answer": "Md. Maksudul Haque, Md. Mostakim Rahman Shipon, Nadira Jahan Ony, Syed Ahsanul Kabir, Umme Habiba",
+    "domain_tags": ["authors"],
+    "question_type": "factual",
+    "created_by": "system",
+    "created_at": "2025-01-01T00:00:00"
+  }
+]

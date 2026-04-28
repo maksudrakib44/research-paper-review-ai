@@ -1,19 +1,17 @@
 """
-src/pipeline.py - Main Research RAG Pipeline
+src/pipeline.py - RAG Pipeline with Groq
 """
 from __future__ import annotations
 
 from pathlib import Path
-from groq import Groq
 from loguru import logger
 
-from src.generation.generator import ResearchAnswerGenerator
+from src.generation.generator import GroqGenerator
 from src.ingestion.ingester import AcademicPaperIngester
 from src.ingestion.faiss_store import FAISSStore
 from src.models import ResearchGroundTruth, ResearchResponse
 from src.retrieval.retriever import HybridRetriever
-from src.validation.ground_truth import ResearchGroundTruthStore
-from src.validation.metrics import ResearchEvaluator
+from src.validation.ground_truth import ResearchGroundTruthStore, ResearchEvaluator
 
 
 class ResearchPipeline:
@@ -21,10 +19,7 @@ class ResearchPipeline:
         self._settings = settings
         self._setup_logging()
         
-        logger.info("Initializing Research RAG Pipeline...")
-        
-        # LLM client
-        self._groq_client = Groq(api_key=settings.groq_api_key)
+        logger.info("🚀 Initializing Research RAG Pipeline")
         
         # Vector store
         settings.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
@@ -33,18 +28,17 @@ class ResearchPipeline:
             embedding_model=settings.embedding_model
         )
         
-        # Pipeline components
+        # Components
         self._ingester = AcademicPaperIngester(self._collection, settings)
-        self._retriever = HybridRetriever(self._collection, settings, self._groq_client)
+        self._retriever = HybridRetriever(self._collection, settings, groq_client=None)
         self._gt_store = ResearchGroundTruthStore(settings.gt_store_path)
         self._evaluator = ResearchEvaluator(threshold=settings.gt_eval_threshold)
-        self._generator = ResearchAnswerGenerator(self._groq_client, settings)
+        self._generator = GroqGenerator(settings)  # Using Groq!
         
-        # Build index if documents exist
         if self._collection.count() > 0:
             self._retriever.build_index()
         
-        logger.info("Pipeline ready!")
+        logger.info(f"✅ Pipeline ready. Papers: {self._collection.count()}")
     
     def ingest(self, path: Path, **kwargs) -> int:
         chunks = self._ingester.ingest(path, **kwargs)
@@ -56,15 +50,9 @@ class ResearchPipeline:
     def ask(self, question: str) -> ResearchResponse:
         retrieval = self._retriever.retrieve(question)
         gt_pair = self._gt_store.find_by_question(question)
-        eval_metrics = self._evaluator.evaluate(
-            question=question,
-            answer="",
-            retrieval=retrieval.chunks,
-            gt_pair=gt_pair
-        )
-        response = self._generator.generate(question, retrieval.chunks, eval_metrics)
+        response = self._generator.generate(question, retrieval.chunks, None)
         
-        if gt_pair:
+        if gt_pair and response.eval_metrics:
             final_metrics = self._evaluator.evaluate(
                 question=question,
                 answer=response.answer,
